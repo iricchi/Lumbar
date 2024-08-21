@@ -161,6 +161,7 @@ class PreprocessingRS(object):
         self.anat_norm = False
         self.slice_timing = False
         self.moco = False
+        self.mocopoly=0
         self.func_norm = False
         self.mask_fname = "mask_sc"
         self.mask_csf_name = "mask_csf"
@@ -251,7 +252,7 @@ class PreprocessingRS(object):
 
         # assign the list of subjects variable
         self.list_subjects = glob(os.path.join(self.parent_path, self.data_root+'*'))
-
+        
         subj_found = [sub.split('/')[-1] for sub in self.list_subjects]
         print("Subjects found:", subj_found)
         
@@ -261,10 +262,10 @@ class PreprocessingRS(object):
 
         
         # # # #### comment
-        # selected_subjects = ['LU_AT'] 
+        # selected_subjects = ['sub-02'] #,'sub-09', 'sub-10','sub-11','sub-12', 'sub-13', 'sub-14', 'sub-15'] 
         
         # self.list_subjects = [sub for sub in self.list_subjects if sub.split('/')[-1]  in selected_subjects]
-        # # ###  end comment
+        # # # ###  end comment
 
         print("Tot num of subjects:", len(self.list_subjects))
 
@@ -362,33 +363,50 @@ class PreprocessingRS(object):
 
     def slice_timing_corr(self):
         # subj_paths = [os.path.join(s, self.func) for s in self.list_subjects]
-
+        subj_paths = self.__check_multisessions(self.func)
+        
         start = time.time()
         print(" ### Info: slice timing correction ...") 
 
         Parallel(n_jobs=self.n_jobs,
                  verbose=100,
-                 backend="multiprocessing")(delayed(self._correct_slice_time)(subpath)\
-                 for subpath in self.list_subjects)
+                 backend="multiprocessing")(delayed(self._correct_slice_time)(sps)\
+                 for sps in subj_paths)
         
         print("### Info: Slice time correction done in %.3f s" %(time.time() - start ))
 
-    def _correct_slice_time(self, subpath):
+    def _correct_slice_time(self, sps):
         
-        subname = subpath.split('/')[-1]
-        timing_path = os.path.join(subpath,  'dicom', f'{subname}_slice-timings.txt')
+        pathfile = self.func
+        if sps.split('/')[-1] == 'func':
+            subname = sps.split('/')[-2]
+            subpath = "/".join(sps.split("/")[:-1])
+            sessions = [""]
+            
+        else:
+            # if multiple sessions
+            subname = sps.split('/')[-3]
+            subpath = "/".join(sps.split("/")[:-2])
 
-        file_to_realign = os.path.join(subpath, 'func/fmri')
-        output_target = os.path.join(subpath, 'func', 'fmri_st_corr')
-        
-        cmd = 'slicetimer -i ' + file_to_realign + ' -o ' + output_target + ' -r ' + str(self.TR) + ' -d 3 --ocustom=' + timing_path
-        os.system(cmd)
+            sessions = ["1","2"]  # this could and should be generalized (now working only for 2 sessions 1 and 2)
+
+        #subname = sps.split('/')[-1]
+        for ses in sessions:
+
+            timing_path = os.path.join(subpath,  'dicom', f'{subname}_slice-timings.txt')
+
+            file_to_realign = os.path.join(subpath, pathfile+ses, 'fmri')
+            output_target = os.path.join(subpath, pathfile+ses, 'fmri_st_corr')
+            
+            cmd = 'slicetimer -i ' + file_to_realign + ' -o ' + output_target + ' -r ' + str(self.TR) + ' -d 3 --ocustom=' + timing_path
+            print(cmd)
+            os.system(cmd)
 
         # compute tsnr
-        run_tsnr_fmri = f'sct_fmri_compute_tsnr -i {file_to_realign}.nii.gz -v 0'
-        run_tsnr_fmri_st = f'sct_fmri_compute_tsnr -i {output_target}.nii.gz -v 0' 
+        # run_tsnr_fmri = f'sct_fmri_compute_tsnr -i {file_to_realign}.nii.gz -v 0'
+        # run_tsnr_fmri_st = f'sct_fmri_compute_tsnr -i {output_target}.nii.gz -v 0' 
 
-        os.system(f'cd func; {run_tsnr_fmri}; {run_tsnr_fmri_st}')
+        # os.system(f'cd func; {run_tsnr_fmri}; {run_tsnr_fmri_st}')
 
     def __check_multisessions(self,folder):
 
@@ -417,7 +435,7 @@ class PreprocessingRS(object):
     def motor_correction(self):
 
         # subj_paths = [os.path.join(s, self.func) for s in self.list_subjects]
-        subj_paths = self.__check_multisessions('func')
+        subj_paths = self.__check_multisessions(self.func)
 
         ## (un)comment
         # s = self.list_subjects[0]
@@ -475,7 +493,7 @@ class PreprocessingRS(object):
     def _moco(self, sps, fmriname="fmri"):
         
         # Kaptan paper they used poly=2
-        run_string = f'cd {sps}; sct_fmri_moco -i {fmriname}.nii.gz -m Mask/mask_{fmriname}.nii.gz -x spline -param poly=0 -ofolder Moco; cp Moco/{fmriname}_moco.nii.gz m{fmriname}.nii.gz; cp Moco/{fmriname}_moco_mean.nii.gz m{fmriname}_mean.nii.gz'
+        run_string = f'cd {sps}; sct_fmri_moco -i {fmriname}.nii.gz -m Mask/mask_{fmriname}.nii.gz -x spline -param poly={self.mocopoly} -ofolder Moco; cp Moco/{fmriname}_moco.nii.gz m{fmriname}.nii.gz; cp Moco/{fmriname}_moco_mean.nii.gz m{fmriname}_mean.nii.gz'
         print(run_string)
         os.system(run_string)
 
@@ -487,17 +505,13 @@ class PreprocessingRS(object):
             os.system(run_string)
             print("Moved fmri file in Processing.")
 
-            ## This was used because compairng with and without slice timing corr, now we're going for slice timing (reviers)
-            ## so we'll use only one
-
-            # if len(self.fmriname.split('_')) == 1:
-            #     # if fmriname is exactly 'fmri' so not slice timing is applied
-            #     run_string2 = f'cd {sps}; mv Moco/moco_params.tsv Moco/n_moco_params.tsv;\
+            # run_string2 = f'cd {sps}; mv Moco/moco_params.tsv Moco/n_moco_params.tsv;\
             #                               mv Moco/moco_params_x.nii.gz Moco/n_moco_params_x.nii.gz \
             #                               mv Moco/moco_params_y.nii.gz Moco/n_moco_params_y.nii.gz'
 
-            #     os.system(run_string2)
-            #     print("Renamed files to not overwrite other runs.")
+            # os.system(run_string2)
+            # print("Renamed files to not overwrite other runs.")
+    
     
     def __load_mocoparams(self, sps, direction):
 
@@ -532,7 +546,7 @@ class PreprocessingRS(object):
     def func_normalize(self):
         
         # subj_paths = [os.path.join(s, self.func) for s in self.list_subjects]
-        subj_paths = self.__check_multisessions('func')
+        subj_paths = self.__check_multisessions(self.func)
         # (un)comment
         # s = self.list_subjects[12]
         # print(s)
@@ -618,7 +632,7 @@ class PreprocessingRS(object):
     
 
     def prepare_physio(self):
-        subj_paths = self.__check_multisessions('physio')
+        subj_paths = self.__check_multisessions(self.physio)
 
         # subj_paths = [os.path.join(s, self.physio) for s in self.list_subjects]
         # ######
@@ -704,7 +718,7 @@ class PreprocessingRS(object):
 
     def pnm_stage1(self):
         
-        subj_paths = self.__check_multisessions('physio')
+        subj_paths = self.__check_multisessions(self.physio)
         # subj_paths = [os.path.join(s, self.physio) for s in self.list_subjects]
         # ######
         # subj_paths = [os.path.join(s, self.physio) for s in self.list_subjects if s.split('/')[-1] in  \
@@ -768,7 +782,7 @@ class PreprocessingRS(object):
 
     def pnm_stage2(self):
 
-        subj_paths = self.__check_multisessions('physio')
+        subj_paths = self.__check_multisessions(self.physio)
         # subj_paths = [os.path.join(s, self.physio) for s in self.list_subjects]
         
         # ######
@@ -891,7 +905,7 @@ class PreprocessingRS(object):
         return fig
 
     def generate_evs(self):
-        subj_paths = self.__check_multisessions('physio')
+        subj_paths = self.__check_multisessions(self.physio)
         # subj_paths = [os.path.join(s, self.physio) for s in self.list_subjects]
         # subj_paths = [os.path.join(s, self.physio) for s in self.list_subjects if s.split('/')[-1] != 'LU_AT']
         # # (un)comment
@@ -988,7 +1002,7 @@ class PreprocessingRS(object):
     def apply_denoising(self):
         
         # subj_paths = [os.path.join(s, self.func) for s in self.list_subjects]
-        subj_paths = self.__check_multisessions('func')
+        subj_paths = self.__check_multisessions(self.func)
 
         # # (un)comment
         # s = self.list_subjects[0]
@@ -1048,7 +1062,7 @@ class PreprocessingRS(object):
     
         filepath = os.path.join(sps,filename)
         nc = self.__count_lines_txt(filepath)
-
+        # print("HEEREEEE subject:", sps)
         # populate the list of Nc regressors per slice
         confounds = np.zeros((self.nslices, self.tpoints, nc))
         with open(os.path.join(sps,filename)) as fp:
@@ -1073,6 +1087,8 @@ class PreprocessingRS(object):
         if 'st' in self.fmriname:
             add = '_st'
             
+        spfolder = os.path.join(sps,f'splitted_mfmri{add}')
+        os.system(f"rm -rf {spfolder}")
         os.makedirs(os.path.join(sps,f'splitted_mfmri{add}'),exist_ok=True)
         
         if len(os.listdir(os.path.join(sps,f'splitted_mfmri{add}'))) != self.nslices:
@@ -1097,6 +1113,9 @@ class PreprocessingRS(object):
         self.fmri_header = fmri.header
         self.tpoints = fmri.shape[-1]
         self.nslices = fmri.shape[-2]
+
+        print("self.tpoints: ", self.tpoints)
+        print("self.nslices: ", self.nslices) 
 
         os.makedirs(os.path.join(sps, 'Nuisance'), exist_ok=True)
         ## Initialize denoised output name 
@@ -1288,7 +1307,7 @@ class PreprocessingRS(object):
 
     def normalize(self):
         # subj_paths = [os.path.join(s, self.func) for s in self.list_subjects]
-        subj_paths = self.__check_multisessions('func')
+        subj_paths = self.__check_multisessions(self.func)
 
         # # (un)comment
         # s = self.list_subjects[0]
@@ -1323,12 +1342,12 @@ class PreprocessingRS(object):
         # use the right input denoised
         denoised_name = f"m{fmriname}_denoised"
         add_outname = ""
-        if "pnm" in self.denoising_regs:
-            add_outname += "_pnm"
+        if "csf" in self.denoising_regs and "pnm" in self.denoising_regs:
+            add_outname += "_csf"
         if "csf" in self.denoising_regs and "pnm" not in self.denoising_regs:        
             add_outname += "_csfonly"
-        elif "csf" in self.denoising_regs and "pnm" in self.denoising_regs:
-            add_outname += "_csf"
+        elif "pnm" in self.denoising_regs:
+            add_outname += "_pnm"
 
         if "outliers" in self.denoising_regs:
             add_outname += "_outl"
@@ -1359,7 +1378,7 @@ class PreprocessingRS(object):
 
     def apply_smoothing(self):
         # subj_paths = [os.path.join(s, self.func) for s in self.list_subjects]
-        subj_paths = self.__check_multisessions('func')
+        subj_paths = self.__check_multisessions(self.func)
 
         # # (un)comment
         # s = self.list_subjects[2]
@@ -1438,7 +1457,7 @@ class PreprocessingRS(object):
     def prepare_for_ta(self): 
         start = time.time()
         #subj_paths = [os.path.join(s, self.func) for s in self.list_subjects]
-        subj_paths = self.__check_multisessions('func')
+        subj_paths = self.__check_multisessions(self.func)
 
         # ## (un)comment
         # s = sorted(self.list_subjects)[1]
