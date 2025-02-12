@@ -125,15 +125,6 @@ from scipy.signal import butter, filtfilt, cheby2, lfilter
 from sklearn import preprocessing as pr
 import requests
 
-def _send_message_telegram(whatever, filtertype):
-
-    TOKEN = "5979998311:AAGl9Did2fwB_1rEd0RHA496Qox6xLghrOM"
-    chat_id = "626146439"
-    message = f"Pipeline: I'm done with {whatever} {filtertype}! "
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={chat_id}&text={message}"
-    print(requests.get(url).json()) # this sends the message
-
-
 class PreprocessingRS(object):
     """PreprocessingRS performs the STEP1 for the whole Pipeline in RS.
 
@@ -1032,8 +1023,7 @@ class PreprocessingRS(object):
                 for sub in subj_paths)
 
         print("### Info: Denoising done in %.3f s" %(time.time() - start ))
-        
-        _send_message_telegram(self.denoising_regs,self.filter_evs)
+
 
         return 
 
@@ -1399,7 +1389,6 @@ class PreprocessingRS(object):
 
         print("### Info: smoothing done in %.3f s" %(time.time() - start ))
 
-        _send_message_telegram("smoothing",self.filter_evs)
         return
 
     def _fslsct_smoothing(self, sps, fmriname="fmri"):
@@ -1481,7 +1470,6 @@ class PreprocessingRS(object):
                  for sub in subj_paths)
 
         print("### Info: preparetion for TA done in %.3f s" %(time.time() - start ))
-        _send_message_telegram("TA folder preparation!","")
         return    
 
     def _prep_for_ta(self, sps,fmriname="fmri"):
